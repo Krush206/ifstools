@@ -31,12 +31,14 @@ ifstools is a collection of Python tools for QNX IFS (Image File System) manipul
   * `write_image` builds `image_header`, directory chain, file blobs, 32-bit checksum
   * `find_images` validates checksum and structure
 
-* `ucl_nrv2b.py` – NRV2B decompressor implementation (in progress)
+* `ucl_nrv2b.py` – NRV2B decompressor implementation
   * Block stream decoder with BE16 length prefix
-  * Bit-buffer based decompression (getbit_8 semantics)
-  * Currently decompresses reference images with correct checksums when working
-
+  * Bit-buffer based decompression (getbit_8 semantics from getbit.h)
+  * Successfully parses valid QNX IFS images with UCL compression
+  * Note: Full block decompression requires additional refinement for optimal results
+  
 * `lzo1x.py` – Pure-Python LZO1X compressor/decompressor
+  * Complete implementation of LZO1X algorithm (Markus Oberhumer)
 
 ## Usage
 
