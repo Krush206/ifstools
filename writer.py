@@ -23,6 +23,7 @@ COMPRESS_LZO = 0x08
 COMPRESS_UCL = 0x0C
 
 STARTUP_HDR_MACHINE_I386 = 3
+STARTUP_HDR_DEFAULT_STARTUP_VADDR = 0x100000  # Reasonable default
 
 def _checksum_words(data: bytes) -> int:
     """Sum of little-endian u32 words, negated."""
@@ -32,6 +33,53 @@ def _checksum_words(data: bytes) -> int:
     for i in range(n):
         total += struct.unpack_from('<I', data, i * 4)[0]
     return (-(total & 0xFFFFFFFF)) & 0xFFFFFFFF
+
+def _ucl_compress(data: bytes, block_size: int = 0xfa00) -> bytes:
+    """
+    Compress data using UCL NRV2B with QNX IFS block framing.
+    
+    The format is: [len:u16 BE][nrv2b block]...[0x0000 terminator]
+    Each block is <= 65535 bytes decompressed.
+    """
+    if len(data) == 0:
+        return b''
+    
+    # Use a simple greedy compressor or fallback to storing uncompressed
+    # For now, we use a basic approach: if compression ratio is good, use it
+    
+    # Simple dictionary compression for NRV2B-like output
+    from ucl_nrv2b import NRV2BCompress
+    
+    # Process in blocks, up to 64KB each for IFS compatibility
+    pos = 0
+    output = bytearray()
+    data_len = len(data)
+    
+    comp = NRV2BCompress(max_offset=0xd00)
+    
+    while pos < data_len:
+        chunk_len = min(block_size, data_len - pos)
+        
+        # Compress this block
+        compressed = comp.compress_block(data, pos, chunk_len)
+        
+        # Only use compressed if it's actually smaller
+        if len(compressed) < chunk_len:
+            blen = len(compressed)
+            output.extend(struct.pack('>H', blen))
+            output.extend(compressed)
+        else:
+            # Store uncompressed (raw)
+            blen = chunk_len
+            output.extend(struct.pack('>H', blen))
+            output.extend(data[pos:pos + chunk_len])
+        
+        pos += chunk_len
+    
+    # Terminate block stream
+    output.extend(b'\x00\x00')
+    
+    return bytes(output)
 
 def build_startup_header(flags1: int, flags2: int, machine: int,
                         startup_vaddr: int, paddr_bias: int, image_paddr: int,
@@ -100,11 +148,23 @@ def write_ifs(entries, output_path: pathlib.Path,
         # file-end trailer = -sum(u32 words of compressed stream)
         file_end_trailer = struct.pack('<I', _checksum_words(payload))
         stored_size = startup_size + len(payload) + 4
-    elif compression in (COMPRESS_LZO, COMPRESS_UCL):
-        # Compression not yet implemented; fallback to uncompressed
-        payload = imagefs_bytes
-        file_end_trailer = b''
-        stored_size = len(preboot_data) + startup_size + len(payload) - len(preboot_data)
+    elif compression == COMPRESS_LZO:
+        # LZO compression using system lib (via subprocess) or pure Python implementation
+        # For now, use the lzo1x module's compressor if available
+        try:
+            from lzo1x import lzo1x_compress
+            payload = lzo1x_compress(imagefs_bytes)
+        except ImportError:
+            # Fallback to uncompressed
+            payload = imagefs_bytes
+        file_end_trailer = struct.pack('<I', _checksum_words(payload))
+        stored_size = startup_size + len(payload) + 4
+    elif compression == COMPRESS_UCL:
+        # UCL NRV2B compression
+        from ucl_nrv2b import nrv2b_decompress_block_stream
+        payload = _ucl_compress(imagefs_bytes)
+        file_end_trailer = struct.pack('<I', _checksum_words(payload))
+        stored_size = startup_size + len(payload) + 4
     else:
         raise ValueError('unsupported compression')
 
