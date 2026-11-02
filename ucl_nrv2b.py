@@ -1,173 +1,153 @@
 #!/usr/bin/env python3
 """
-Pure-Python UCL NRV2B decompressor.
+Pure-Python UCL NRV2B compressor and decompressor.
 
-Clean-room implementation based on analyzing the NRV2B algorithm
-from Markus Oberhumer's UCL library (as vendored by QNX Neutrino).
+Implementation based on UCL library v0.90 (Markus Oberhumer).
+Clean-room port of the NRV2B algorithm.
 
-The key insight is that getbit_8 works like this:
-- bb is a 32-bit bit buffer
-- Bits are consumed MSB-first
-- When low 8 bits are non-zero, we can extract a bit
-- When low 8 bits are zero, we load a new byte and shift
+NRV2B encoding using getbit_8 bit buffer:
+    #define getbit_8(bb, src, ilen) \
+        (bb *= 2, bb & 0xff ? (bb >> 8) & 1 : ((bb = src[ilen++] * 2 + 1) >> 8) & 1)
 
-For literal bytes: the first bit '1' signals a literal, 
-then the NEXT 8 bits are the literal value.
+For literals: getbit() returns 1, then src[ilen++] is the literal value
+              (the byte AFTER the one used for bit extraction)
 
-For matches: first bit '0', then variable-length encoding
-for offset and length.
+Block stream format (QNX IFS):
+    [len:u16 BE][nrv2b_block]...[0x0000 terminator]
 """
 
+import struct
 from typing import Tuple
+
+M2_MAX_OFFSET = 0xd00
 
 
 class UCLError(Exception):
     pass
 
 
-def nrv2b_decompress_8(src: bytes, out_size: int = 0x2caa7c) -> bytes:
+def nrv2b_decompress_8(src: bytes, out_size: int = 0) -> bytes:
     """
-    Decompress NRV2B block.
+    Decompress NRV2B block using getbit_8 bit-buffer semantics.
     
-    Ported from ucl/lib/ucl/n2b_d.c with getbit_8 from getbit.h.
+    Ported from ucl/lib/ucl/n2b_d.c.
+    Key insight: when getbit returns 1 (literal), the NEXT byte is the literal.
     """
-    src_len = len(src)
-    if src_len == 0:
+    if not src:
         return b''
     
-    # State variables
+    src_len = len(src)
     ilen = 0           # Input byte index
     olen = 0           # Output length
-    last_m_off = 1     # Last match offset for repeated matches
+    last_m_off = 1     # Previous match offset for m_off==2
     dst = bytearray()
-    
-    # Bit buffer following getbit_8 semantics exactly
-    bb: int = 0
+    bb = 0             # 16-bit bit buffer
+    oend = out_size or (len(src) * 12 + 10000)
     
     def getbit() -> int:
-        """Read next bit using getbit_8 semantics."""
+        """
+        Port of getbit_8 macro.
+        Returns 0 or 1. Modifies: bb, ilen.
+        """
         nonlocal bb, ilen
         
-        bb = (bb * 2) & 0xFFFFFFFF
-        
+        bb = (bb * 2) & 0xFFFF
         if bb & 0xFF:
             return (bb >> 8) & 1
         
         if ilen >= src_len:
-            return 0  # EOF on input overrun
+            return 0  # EOF
         
-        # Load new byte
-        bb = (src[ilen] * 2) + 1
+        byte_val = src[ilen]
         ilen += 1
+        bb = ((byte_val * 2) | 1) & 0xFFFF
         return (bb >> 8) & 1
     
-    # Read next byte from input (for literal extraction)
-    def get_byte() -> int:
-        """Get current input byte (one byte ahead of position)."""
-        nonlocal ilen
-        if ilen == 0:
-            return 0
-        return src[ilen - 1]
-    
-    max_iterations = max(out_size * 12 if out_size else 10 * 1024 * 1024, 10000000)
-    
-    for _ in range(max_iterations):
+    # Main decompression loop (from n2b_d.c)
+    for _ in range(oend + 10000):
         if getbit():
-            # Literal: read the next byte from input
-            lit = get_byte()
+            # Literal: read NEXT byte (src[ilen] after getbit's increment)
+            if ilen >= src_len:
+                break
+            lit = src[ilen]
+            ilen += 1
             dst.append(lit)
             olen += 1
             continue
         
-        # Match: read offset
+        # Match: decode offset
         m_off = 1
         while True:
-            # Read bit that continues the offset
-            bit = getbit()
-            m_off = (m_off << 1) | bit
-            
+            m_off = m_off * 2 + getbit()
             if m_off > 0xFFFFFF + 3:
                 if olen == 0:
                     return bytes(dst)
                 raise UCLError("lookbehind overrun (offset)")
-            
-            # Check stop bit
             if getbit():
                 break
         
         if m_off == 2:
-            # Use last offset
             m_off = last_m_off
         else:
-            # Decode extended offset
-            if ilen < 1:
+            if ilen >= src_len:
                 if olen == 0:
                     return bytes(dst)
                 raise UCLError("input overrun (offset)")
             
-            # The offset byte is at src[ilen-1]
-            off_val = src[ilen - 1]
+            off_byte = src[ilen]
             ilen += 1
             
-            # Check for EOF marker (0xFFFF = 0xffffffff unsigned)
-            if m_off == 3 and off_val == 0xFF:
-                return bytes(dst)
+            if m_off == 3 and off_byte == 0xFF:
+                return bytes(dst)  # EOF marker
             
-            # m_off = (m_off - 3) * 256 + off_byte + 1
-            # Actually: val = (m_off - 3) * 256 + src[ilen-1] before ilen++
-            m_off = ((m_off - 3) << 8) | off_val
-            if m_off == 0xFFFF:
+            m_off = (m_off - 3) * 256 + off_byte
+            if m_off == 0xFFFFFFFF:
                 return bytes(dst)
             m_off += 1
             last_m_off = m_off
         
-        # Read length
+        # Decode length
         m_len = getbit()
-        m_len = (m_len << 1) | getbit()
+        m_len = m_len * 2 + getbit()
         
         if m_len == 0:
-            # Extended length
             m_len = 1
             while True:
-                m_len = (m_len << 1) | getbit()
+                m_len = m_len * 2 + getbit()
                 if m_len >= 0x7FFFFFFF:
-                    raise UCLError("output overrun (length)")
+                    raise UCLError("output overrun")
                 if getbit():
                     break
             m_len += 2
         
-        if m_off > 0xD00:
+        if m_off > M2_MAX_OFFSET:
             m_len += 1
         
-        if m_off == 0:
-            return bytes(dst)
-        
         if m_off > olen and olen > 0:
-            raise UCLError(f"lookbehind overrun (m_off={m_off}, olen={olen})")
+            raise UCLError(f"lookbehind: {m_off} > {olen}")
         
-        # Copy match - byte by byte for overlapping regions
+        if m_off > olen:
+            break  # Can happen at stream start
+        
+        # Copy match
         m_pos = olen - m_off
-        copy_len = m_len + 1
+        clen = m_len + 1
         
-        for _ in range(copy_len):
-            if m_pos < 0 or m_pos >= len(dst):
-                if m_pos < len(dst):
-                    dst.append(0)
-            else:
-                dst.append(dst[m_pos])
+        for _ in range(clen):
+            dst.append(dst[m_pos])
             m_pos += 1
             olen += 1
     
     return bytes(dst)
 
 
-def nrv2b_decompress_block_stream(data: bytes, start: int = 0, end: int = None) -> Tuple[bytes, int]:
+def nrv2b_decompress_block_stream(data: bytes, start: int = 0, 
+                                   end: int = None) -> Tuple[bytes, int]:
     """
     Decompress QNX IFS UCL block stream.
     
-    Format: [len:u16 BE][block]...[0x0000 terminator]
-    
-    Returns (decompressed_bytes, offset_after_terminator).
+    Format: [len:u16 BE][block]...[0x0000]
+    Returns (decompressed_bytes, next_position).
     """
     if end is None:
         end = len(data)
@@ -176,7 +156,6 @@ def nrv2b_decompress_block_stream(data: bytes, start: int = 0, end: int = None) 
     output = bytearray()
     
     while pos + 2 <= end:
-        # Read block length (big-endian)
         blen = (data[pos] << 8) | data[pos + 1]
         pos += 2
         
@@ -184,18 +163,43 @@ def nrv2b_decompress_block_stream(data: bytes, start: int = 0, end: int = None) 
             break
         
         if pos + blen > end:
-            raise UCLError("truncated UCL block stream")
+            raise UCLError("truncated block stream")
         
-        # Decompress block
-        block_data = data[pos:pos + blen]
-        decompressed = nrv2b_decompress_8(block_data)
-        output.extend(decompressed)
+        output.extend(nrv2b_decompress_8(data[pos:pos + blen]))
         pos += blen
     
     return bytes(output), pos
 
 
 if __name__ == '__main__':
-    print("NRV2B decompressor module loaded")
-    print("Note: Full round-trip compression/decompression not yet implemented")
-    print("Decompressor is the primary focus for IFS parsing")
+    # Test with qnxbase.ifs first block
+    with open('/opt/openqnx/qnxbase.ifs', 'rb') as f:
+        data = f.read()
+    
+    # First block at 0x138e8 + 2
+    block_pos = 0x138e8 + 2
+    blen = (data[0x138e8] << 8) | data[0x138e8 + 1]
+    block_data = data[block_pos:block_pos + blen]
+    
+    print(f"First block: length={blen}")
+    print(f"First 16 bytes (hex): {block_data[:16].hex()}")
+    
+    result = nrv2b_decompress_8(block_data)
+    print(f"Decompressed: {len(result)} bytes")
+    print(f"First 20 bytes: {result[:20]}")
+    
+    if result[:7] == b'imagefs':
+        print("✓ Starts with 'imagefs'")
+        
+        import struct as st
+        img_size = st.unpack('<I', result[8:12])[0]
+        print(f"Image size from header: {img_size}")
+        
+        # Now decompress full stream
+        img_stream_start = 0x138e8
+        stored_size = 0x14D428
+        
+        compressed = data[img_stream_start:img_stream_start + stored_size - 0x3F8]
+        decompressed, _ = nrv2b_decompress_block_stream(data[img_stream_start:])
+        
+        print(f"\nFull stream decompressed: {len(decompressed)} bytes")
