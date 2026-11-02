@@ -1,6 +1,15 @@
-# mkifs-new
+# ifstools
 
-Clean-room Python reimplementation of QNX 6.4 `mkifs`/`dumpifs` for Linux, built from openQNX sources.
+ifstools is a collection of Python tools for QNX IFS (Image File System) manipulation.
+
+## Components
+
+* **`dumpifs.py`** – Clean-room Python port of QNX's `dumpifs` utility for parsing IFS images
+* **`writer.py`** – IFS image writer with startup header generation
+* **`mkifs.py`** – Simplified mkifs buildfile processor (uncompressed standalone images)
+* **`imagefs.py`** – Core uncompressed imagefs read/write library
+* **`ucl_nrv2b.py`** – Pure-Python NRV2B decompressor for UCL-compressed streams
+* **`lzo1x.py`** – Pure-Python LZO1X compressor/decompressor
 
 ## What works now
 
@@ -34,18 +43,18 @@ Clean-room Python reimplementation of QNX 6.4 `mkifs`/`dumpifs` for Linux, built
 ### Build an IFS with startup header (uncompressed):
 
 ```sh
-PYTHONPATH=/opt/openqnx/mkifs_new python3 -c "
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
 from writer import write_ifs
 import pathlib
 write_ifs([('/hello.txt', pathlib.Path('hello.txt'), False)], pathlib.Path('hello.ifs'))
 "
-PYTHONPATH=/opt/openqnx/mkifs_new python3 dumpifs.py hello.ifs -v
+PYTHONPATH=/opt/openqnx/ifstools python3 dumpifs.py hello.ifs -v
 ```
 
 ### Use ZLIB compression:
 
 ```sh
-PYTHONPATH=/opt/openqnx/mkifs_new python3 -c "
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
 from writer import write_ifs, COMPRESS_ZLIB
 import pathlib
 write_ifs([('/hello.txt', pathlib.Path('hello.txt'), False)], pathlib.Path('hello.ifs'), compression=COMPRESS_ZLIB)
@@ -74,17 +83,17 @@ Uncompressed IFS round-trip verified:
 echo "test data" > test.txt
 
 # Build IFS
-PYTHONPATH=/opt/openqnx/mkifs_new python3 -c "
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
 from writer import write_ifs
 write_ifs([('/test.txt', 'test.txt', False)], 'test.ifs')
 "
 
 # Verify with dumpifs
-PYTHONPATH=/opt/openqnx/mkifs_new python3 dumpifs.py test.ifs -v
+PYTHONPATH=/opt/openqnx/ifstools python3 dumpifs.py test.ifs -v
 # Expected: shows Image-header, Root-dirent, test.txt with correct size
 
 # Extract and verify
 rm -rf extracted && mkdir extracted
-PYTHONPATH=/opt/openqnx/mkifs_new python3 dumpifs.py test.ifs -x -d extracted
+PYTHONPATH=/opt/openqnx/ifstools python3 dumpifs.py test.ifs -x -d extracted
 cat extracted/test.txt  # Should output "test data"
 ```
