@@ -217,12 +217,13 @@ These limitations exist by design. The `writer.py` tool should be used for full 
 
 ### LZO1X Match Format
 
-| Match Type | Opcode Range | Offset Range | Length Range | Encoding |
-|------------|--------------|--------------|--------------|----------|
-| M1 (short) | 0-31 | 1-63 | 2 | `op = ((off-1&amp;3)<<2)`, `b1 = (off-1)>>2` |
-| M2 (near) | 64-127 | 64-2048 | 3-8 | `op = (mlen-2)<<5 &#124; ((off-1&amp;7)<<2)`, `b1 = (off-1)>>3` |
-| M3 (far) | 32-63 | 32-16383 | 3-99+ | `op = 0x20&#124;ml`, extended: `op=0x20`, `ll=ml-33`, `b1=(off-1&amp;63)<<2`, `b2=(off-1)>>6` |
-| M4 (very far) | 16-31 | 16384+ | 3-99+ | `op = 0x10 &#124; (base_off_bit&lt;&lt;3) &#124; ml`, extended: `ll=ml-9`, `off_adj = off - 0x4000 - (bit&lt;&lt;11)` |
+<table>
+<tr><th>Match Type</th><th>Opcode Range</th><th>Offset Range</th><th>Length Range</th><th>Encoding</th></tr>
+<tr><td><code>M1 (short)</code></td><td>0-31</td><td>1-63</td><td>2</td><td><code>op = ((off-1&amp;3)&lt;&lt;2)</code>, <code>b1 = (off-1)&gt;&gt;2</code></td></tr>
+<tr><td><code>M2 (near)</code></td><td>64-127</td><td>64-2048</td><td>3-8</td><td><code>op = (mlen-2)&lt;&lt;5 &#124; ((off-1&amp;7)&lt;&lt;2)</code>, <code>b1 = (off-1)&gt;&gt;3</code></td></tr>
+<tr><td><code>M3 (far)</code></td><td>32-63</td><td>32-16383</td><td>3-99+</td><td><code>op = 0x20&#124;ml</code>, extended: <code>op=0x20</code>, <code>ll=ml-33</code>, <code>b1=(off-1&amp;63)&lt;&lt;2</code>, <code>b2=(off-1)&gt;&gt;6</code></td></tr>
+<tr><td><code>M4 (very far)</code></td><td>16-31</td><td>16384+</td><td>3-99+</td><td><code>op = 0x10 &#124; (base_off_bit&lt;&lt;3) &#124; ml</code>, extended: <code>ll=ml-9</code>, <code>off_adj = off - 0x4000 - (bit&lt;&lt;11)</code></td></tr>
+</table>
 
 ### UCL NRV2B Format
 
