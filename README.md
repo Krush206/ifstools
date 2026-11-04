@@ -219,10 +219,10 @@ These limitations exist by design. The `writer.py` tool should be used for full 
 
 | Match Type | Opcode Range | Offset Range | Length Range | Encoding |
 |------------|--------------|--------------|--------------|----------|
-| M1 (short) | 0-31 | 1-63 | 2 | `op = ((off-1&3)<<2)`, `b1 = (off-1)>>2` |
-| M2 (near) | 64-127 | 64-2048 | 3-8 | `op = (mlen-2)<<5 | ((off-1&7)<<2)`, `b1 = (off-1)>>3` |
-| M3 (far) | 32-63 | 32-16383 | 3-99+ | `op = 0x20|ml`, extended: `op=0x20`, `ll=ml-33`, `b1=(off-1&63)<<2`, `b2=(off-1)>>6` |
-| M4 (very far) | 16-31 | 16384+ | 3-99+ | `op = 0x10 | (base_off_bit<<3) | ml`, extended: `ll=ml-9`, `off_adj = off - 0x4000 - (bit<<11)` |
+| M1 (short) | 0-31 | 1-63 | 2 | `op = ((off-1&amp;3)<<2)`, `b1 = (off-1)>>2` |
+| M2 (near) | 64-127 | 64-2048 | 3-8 | `op = (mlen-2)<<5 &#124; ((off-1&amp;7)<<2)`, `b1 = (off-1)>>3` |
+| M3 (far) | 32-63 | 32-16383 | 3-99+ | `op = 0x20&#124;ml`, extended: `op=0x20`, `ll=ml-33`, `b1=(off-1&amp;63)<<2`, `b2=(off-1)>>6` |
+| M4 (very far) | 16-31 | 16384+ | 3-99+ | `op = 0x10 &#124; (base_off_bit&lt;&lt;3) &#124; ml`, extended: `ll=ml-9`, `off_adj = off - 0x4000 - (bit&lt;&lt;11)` |
 
 ### UCL NRV2B Format
 
@@ -231,6 +231,6 @@ These limitations exist by design. The `writer.py` tool should be used for full 
 
 ### Literal Encoding
 
-* Initial run: `t >= 17` → `lit_count = t - 17` (1-18 literals)
+* Initial run: `t &#62;= 17` → `lit_count = t - 17` (1-18 literals)
 * Main state: `t = 0..15` → `lit_count = t + 3` (3-18 literals)
 * Extended literal: `t = 0` → read continuation bytes for 19+ literals
