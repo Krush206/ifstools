@@ -460,6 +460,10 @@ def process(image: str, raw: bytes, flags: int, verbose: int,
                 out.write(" %8x %8lx  %s\n" %
                           (spos + STARTUP_HDR_SIZE,
                            shdr.startup_size - STARTUP_HDR_SIZE, "startup.*"))
+            # Display preboot ELF if present (verbose mode)
+            if verbose > 1 and shdr and shdr.preboot_size > 0:
+                if check("preboot") == 0:
+                    display_elf(raw, 0, shdr.preboot_size, "preboot", verbose - 1, out)
         display_ihdr(buf, ihdr, ipos, check, verbose, out)
         if check("Image-directory") == 0:
             out.write(" %8x %8lx  %s\n" %
@@ -686,6 +690,41 @@ def _extract_file(buf: bytes, ipos: int, ent: DirEntry, name: str,
         pass
     if verbose:
         print("Extracted %s" % name)
+
+
+def _extract_preboot(buf: bytes, preboot_size: int, verbose: int,
+                     dest_dir: str = None) -> None:
+    """Extract and display the preboot ELF (before startup header)."""
+    if preboot_size == 0 or preboot_size >= len(buf):
+        return
+
+    preboot_data = buf[:preboot_size]
+
+    if verbose:
+        # Display preboot ELF info if it's an ELF
+        display_elf(preboot_data, 0, preboot_size, "preboot", verbose - 1, sys.stdout)
+
+    if dest_dir:
+        name = "preboot"
+        if preboot_data[:4] == b'\x7fELF':
+            # It's an ELF, try to determine class for suffix
+            ei_class = preboot_data[4]
+            if ei_class == 1:
+                name += ".elf32"
+            elif ei_class == 2:
+                name += ".elf64"
+            else:
+                name += ".elf"
+
+        if dest_dir != ".":
+            name = os.path.join(dest_dir, name)
+        try:
+            with open(name, 'wb') as f:
+                f.write(preboot_data)
+            if verbose:
+                print("Extracted preboot" if verbose <= 1 else "")
+        except OSError as exc:
+            error(0, "Unable to create preboot file: %s\n" % exc.strerror)
 
 
 # ---------------------------------------------------------------------------
