@@ -503,6 +503,16 @@ def process(image: str, raw: bytes, flags: int, verbose: int,
                     _extract_file(buf, ipos, ent, name, verbose)
             if flags & (FLAG_MD5 | FLAG_DISPLAY):
                 display_file(buf, ipos, ent, flags, check, verbose, out)
+            # Check if this is a boot file (matches any boot_ino index)
+            if verbose > 1:
+                is_boot = False
+                for boot_ino in ihdr.boot_ino:
+                    if boot_ino == ent.ino:
+                        is_boot = True
+                        break
+                if is_boot:
+                    display_elf(buf, ipos + ent.offset, ent.filesize,
+                                c_basename(ent.path), verbose, out)
             if ent.ino == ihdr.script_ino and verbose > 1:
                 display_script(buf, ipos + ent.offset, ent.filesize, out,
                                assoc, ext_sched)
