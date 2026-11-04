@@ -177,9 +177,12 @@ print('UCL round-trip:', data == decomp)
 
 ## Known limits
 
-* Boot startup ELF, preboot data, and other advanced startup features not yet implemented
 * `mkifs.py` for standalone IFS only (no boot headers; use `writer.py` for full IFS with headers)
 * Virtual images in `mkifs.py` are converted to directories in standalone IFS
+
+## Features now implemented
+
+* **Preboot ELF support**: dumpifs.py can display and extract preboot ELF when `preboot_size > 0` in startup header (verbose mode)
 
 ## Algorithm Reference
 
