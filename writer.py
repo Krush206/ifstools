@@ -34,36 +34,15 @@ def _checksum_words(data: bytes) -> int:
         total += struct.unpack_from('<I', data, i * 4)[0]
     return (-(total & 0xFFFFFFFF)) & 0xFFFFFFFF
 
-def _ucl_compress(data: bytes, block_size: int = 0xfa00) -> bytes:
+def _ucl_compress(data: bytes, block_size: int = 64 * 1024) -> bytes:
     """
-    Compress data using UCL NRV2B with QNX IFS block framing.
+    Compress data for QNX IFS using UCL NRV2B format.
     
-    The format is: [len:u16 BE][nrv2b block]...[0x0000 terminator]
-    Each block is <= 65535 bytes decompressed.
-    
-    Note: This implementation produces literal-only blocks which are valid NRV2B
-    but don't achieve good compression ratios. A full LZ implementation would
-    optimize compression.
+    Uses the nrv2b_compress function from ucl_nrv2b.py for proper
+    NRV2B block stream encoding.
     """
-    if len(data) == 0:
-        return b'\x00\x00'
-    
-    import zlib as _zlib
-    
-    output = bytearray()
-    pos = 0
-    
-    # Try ZLIB compression first - it's widely supported and compresses well
-    # QNX IFS can accept ZLIB-compressed data with flags1 = 0x04
-    zlib_compressed = _zlib.compress(data, 9)
-    
-    # For true UCL compression, we'd need a full LZ implementation
-    # For now, use a simple approach: store in blocks with literal encoding
-    # This is slower but produces valid NRV2B
-    
-    # Actually, let's just use ZLIB for now since it works
-    # and comment out UCL compression
-    return zlib_compressed
+    from ucl_nrv2b import nrv2b_compress
+    return nrv2b_compress(data, block_size=block_size)
 
 def build_startup_header(flags1: int, flags2: int, machine: int,
                         startup_vaddr: int, paddr_bias: int, image_paddr: int,
@@ -133,19 +112,13 @@ def write_ifs(entries, output_path: pathlib.Path,
         file_end_trailer = struct.pack('<I', _checksum_words(payload))
         stored_size = startup_size + len(payload) + 4
     elif compression == COMPRESS_LZO:
-        # LZO compression using system lib (via subprocess) or pure Python implementation
-        # For now, use the lzo1x module's compressor if available
-        try:
-            from lzo1x import lzo1x_compress
-            payload = lzo1x_compress(imagefs_bytes)
-        except ImportError:
-            # Fallback to uncompressed
-            payload = imagefs_bytes
+        from lzo1x import lzo1x_compress
+        payload = lzo1x_compress(imagefs_bytes)
+        # file-end trailer = -sum(u32 words of compressed stream)
         file_end_trailer = struct.pack('<I', _checksum_words(payload))
         stored_size = startup_size + len(payload) + 4
     elif compression == COMPRESS_UCL:
         # UCL NRV2B compression
-        from ucl_nrv2b import nrv2b_decompress_block_stream
         payload = _ucl_compress(imagefs_bytes)
         file_end_trailer = struct.pack('<I', _checksum_words(payload))
         stored_size = startup_size + len(payload) + 4
