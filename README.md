@@ -5,7 +5,7 @@ ifstools is a collection of Python tools for QNX IFS (Image File System) manipul
 ## Components
 
 * **`dumpifs.py`** – Clean-room Python port of QNX's `dumpifs` utility for parsing IFS images
-* **`writer.py`** – IFS image writer with startup header generation and compression support
+* **`writer.py`** – IFS image writer with startup header and compression support
 * **`mkifs.py`** – Simplified mkifs buildfile processor with virtual images and script blocks
 * **`imagefs.py`** – Core uncompressed imagefs read/write library
 * **`ucl_nrv2b.py`** – Pure-Python NRV2B compressor and decompressor
