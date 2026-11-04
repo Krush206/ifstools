@@ -10,16 +10,17 @@ ifstools is a collection of Python tools for QNX IFS (Image File System) manipul
 * **`imagefs.py`** – Core uncompressed imagefs read/write library
 * **`ucl_nrv2b.py`** – Pure-Python NRV2B compressor and decompressor
 * **`lzo1x.py`** – Pure-Python LZO1X compressor/decompressor with full block stream support
+* **`dinit.py`** – Python port of QNX dinit utility for creating bootable QEMU disk images from IFS files
 
 ## What works now
 
-* `dumpifs.py` – full clean-room port of `trunk/utils/m/mkxfs/dumpifs/dumpifs.c`
+* **`dumpifs.py`** – full clean-room port of QNX's `dumpifs` utility for parsing IFS images
   * Finds startup header via signature `0x00FF7EEB` with zero-field check, supports little/big endian
   * Decompresses ZLIB-compressed images correctly
   * Parses `startup_header` 256 bytes, `image_header`, `image_dirent`, image/trailer checksums
   * Verbose listing, MD5, extraction with parent directory creation
 
-* `writer.py` – IFS writer with startup header and compression
+* **`writer.py`** – IFS writer with startup header and compression
   * Builds a little-endian `imagefs` via `imagefs.py` then wraps it with a valid 256-byte startup header
   * Correct fields: signature, version, flags1/flags2, header_size, machine, startup_vaddr, paddr_bias, image_paddr, ram_paddr, ram_size, startup_size, stored_size, imagefs_paddr, imagefs_size, preboot_size
   * Startup trailer checksum = `-sum(u32 words of [spos, spos+startup_size-4))`
@@ -27,23 +28,31 @@ ifstools is a collection of Python tools for QNX IFS (Image File System) manipul
   * **ZLIB compression** supported: `flags1 = VIRTUAL|0x04`, compressed stream + file-end trailer
   * **LZO1X compression** supported: `flags1 = VIRTUAL|0x08`, LZO1X block stream format
   * **UCL NRV2B compression** supported: `flags1 = VIRTUAL|0x0C`, NRV2B block stream format
+  * Preboot ELF support: can display and extract preboot ELF when `preboot_size > 0` in startup header (verbose mode)
 
-* `imagefs.py` – uncompressed imagefs read/write
+* **`imagefs.py`** – uncompressed imagefs read/write
   * `write_image` builds `image_header`, directory chain, file blobs, 32-bit checksum
   * `find_images` validates checksum and structure
 
-* `ucl_nrv2b.py` – NRV2B compressor and decompressor
-  * Block stream decoder/encoder with big-endian 16-bit length prefix
-  * Bit-buffer based decompression (getbit_8 semantics from getbit.h)
+* **`ucl_nrv2b.py`** – NRV2B compressor and decompressor
+  * Block stream: `[BE16 len][block]...[0x0000]`
+  * NRV2B match: 2-byte encoded with bit-packed fields
   * Successfully compresses and decompresses data in QNX IFS format
 
-* `lzo1x.py` – Pure-Python LZO1X compressor/decompressor
+* **`lzo1x.py`** – Pure-Python LZO1X compressor/decompressor
   * Complete implementation of LZO1X algorithm (Markus Oberhumer)
   * Full block-stream framing for QNX IFS: `[len:u16 BE][lzo1x block]...[0x0000]`
   * Match encoding: M1 (off<64, len=2), M2 (64≤off≤2048, len=3-8), M3 (off<16384, len≥3), M4 (off≥16384)
   * Extended length encoding for matches > 8 (M2) or > 33 (M3) bytes
   * Proper EOF marker handling (0x11 0x00 0x00)
   * All-roundtrip tests pass for various data patterns
+
+* **`dinit.py`** – Python port of QNX dinit utility
+  * Creates bootable QEMU virtual disk images from IFS files
+  * Replicates the QNX utility used in `build_cmd`/`build_cmd_with_create`
+  * Command-line flags: `-f` (IFS file/directory), `-H` (with header, default), `-B` (boot params, e.g., "pc2"), `-R` (rebuild from source)
+  * Creates MBR-partitioned disk images compatible with QEMU
+  * Verified: all modes produce valid disk images with 0xAA55 MBR signature and bootable partition
 
 ## Usage
 
@@ -119,9 +128,26 @@ EOF
 python3 mkifs.py image.build image.ifs
 ```
 
+### Port dinit: create bootable QEMU disk image
+
+```sh
+# Basic: create disk from existing IFS
+python3 dinit.py -f input.ifs output.img
+
+# With startup header (default)
+python3 dinit.py -H -f input.ifs output.img
+
+# With boot parameters (e.g., "pc2" for BIOS x86 compatibility)
+python3 dinit.py -B pc2 -f input.ifs output.img
+
+# Rebuild IFS from source directory
+python3 dinit.py -R -f sourcedir output.img
+```
+
 ## Test verification
 
 Uncompressed IFS round-trip verified:
+
 ```sh
 # Create test file
 echo "test data" > test.txt
@@ -145,13 +171,14 @@ cat extracted/test.txt  # Should output "test data"
 ## Compression round-trip tests
 
 All compression types verified:
+
 ```sh
 # ZLIB round-trip
 PYTHONPATH=/opt/openqnx/ifstools python3 -c "
 from writer import write_ifs, COMPRESS_ZLIB, _checksum_words
 import struct, zlib, pathlib
 data = b'A' * 100 + b'B' * 100
-header = b'\\x00\\xff\\x7e\\xeb' + struct.pack('<HBB', 1, 0x06, 0) + b'\\x00' * 248 + struct.pack('<I', _checksum_words(zlib.compress(data)))
+header = b'\x00\xff\x7e\xeb' + struct.pack('<HBB', 1, 0x06, 0) + b'\x00' * 248 + struct.pack('<I', _checksum_words(zlib.compress(data)))
 ifsf = header + zlib.compress(data) + struct.pack('<I', _checksum_words(zlib.compress(data)))
 print('ZLIB round-trip:', zlib.decompress(ifsf[264:-4]) == data)
 "
@@ -179,6 +206,8 @@ print('UCL round-trip:', data == decomp)
 
 * `mkifs.py` for standalone IFS only (no boot headers; use `writer.py` for full IFS with headers)
 * Virtual images in `mkifs.py` are converted to directories in standalone IFS
+
+These limitations exist by design. The `writer.py` tool should be used for full IFS with boot headers, compression, and proper virtual image support.
 
 ## Features now implemented
 
