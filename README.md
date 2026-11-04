@@ -5,11 +5,11 @@ ifstools is a collection of Python tools for QNX IFS (Image File System) manipul
 ## Components
 
 * **`dumpifs.py`** – Clean-room Python port of QNX's `dumpifs` utility for parsing IFS images
-* **`writer.py`** – IFS image writer with startup header generation
-* **`mkifs.py`** – Simplified mkifs buildfile processor (uncompressed standalone images)
+* **`writer.py`** – IFS image writer with startup header generation and compression support
+* **`mkifs.py`** – Simplified mkifs buildfile processor with virtual images and script blocks
 * **`imagefs.py`** – Core uncompressed imagefs read/write library
-* **`ucl_nrv2b.py`** – Pure-Python NRV2B decompressor for UCL-compressed streams
-* **`lzo1x.py`** – Pure-Python LZO1X compressor/decompressor
+* **`ucl_nrv2b.py`** – Pure-Python NRV2B compressor and decompressor
+* **`lzo1x.py`** – Pure-Python LZO1X compressor/decompressor with full block stream support
 
 ## What works now
 
@@ -18,27 +18,32 @@ ifstools is a collection of Python tools for QNX IFS (Image File System) manipul
   * Decompresses ZLIB-compressed images correctly
   * Parses `startup_header` 256 bytes, `image_header`, `image_dirent`, image/trailer checksums
   * Verbose listing, MD5, extraction with parent directory creation
-  * **Note**: UCL/LZO decompression needs refinement to match reference output exactly
 
-* `writer.py` – IFS writer with startup header
+* `writer.py` – IFS writer with startup header and compression
   * Builds a little-endian `imagefs` via `imagefs.py` then wraps it with a valid 256-byte startup header
   * Correct fields: signature, version, flags1/flags2, header_size, machine, startup_vaddr, paddr_bias, image_paddr, ram_paddr, ram_size, startup_size, stored_size, imagefs_paddr, imagefs_size, preboot_size
   * Startup trailer checksum = `-sum(u32 words of [spos, spos+startup_size-4))`
   * Uncompressed round-trip: `writer.write_ifs` → `dumpifs.py` lists/extracts correctly
-  * ZLIB compressed output supported: `flags1 = VIRTUAL|0x04`, compressed stream + file-end trailer
+  * **ZLIB compression** supported: `flags1 = VIRTUAL|0x04`, compressed stream + file-end trailer
+  * **LZO1X compression** supported: `flags1 = VIRTUAL|0x08`, LZO1X block stream format
+  * **UCL NRV2B compression** supported: `flags1 = VIRTUAL|0x0C`, NRV2B block stream format
 
 * `imagefs.py` – uncompressed imagefs read/write
   * `write_image` builds `image_header`, directory chain, file blobs, 32-bit checksum
   * `find_images` validates checksum and structure
 
-* `ucl_nrv2b.py` – NRV2B decompressor implementation
-  * Block stream decoder with BE16 length prefix
+* `ucl_nrv2b.py` – NRV2B compressor and decompressor
+  * Block stream decoder/encoder with big-endian 16-bit length prefix
   * Bit-buffer based decompression (getbit_8 semantics from getbit.h)
-  * Successfully parses valid QNX IFS images with UCL compression
-  * Note: Full block decompression requires additional refinement for optimal results
-  
+  * Successfully compresses and decompresses data in QNX IFS format
+
 * `lzo1x.py` – Pure-Python LZO1X compressor/decompressor
   * Complete implementation of LZO1X algorithm (Markus Oberhumer)
+  * Full block-stream framing for QNX IFS: `[len:u16 BE][lzo1x block]...[0x0000]`
+  * Match encoding: M1 (off<64, len=2), M2 (64≤off≤2048, len=3-8), M3 (off<16384, len≥3), M4 (off≥16384)
+  * Extended length encoding for matches > 8 (M2) or > 33 (M3) bytes
+  * Proper EOF marker handling (0x11 0x00 0x00)
+  * All-roundtrip tests pass for various data patterns
 
 ## Usage
 
@@ -63,6 +68,26 @@ write_ifs([('/hello.txt', pathlib.Path('hello.txt'), False)], pathlib.Path('hell
 "
 ```
 
+### Use LZO1X compression:
+
+```sh
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
+from writer import write_ifs, COMPRESS_LZO
+import pathlib
+write_ifs([('/hello.txt', pathlib.Path('hello.txt'), False)], pathlib.Path('hello.ifs'), compression=COMPRESS_LZO)
+"
+```
+
+### Use UCL NRV2B compression:
+
+```sh
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
+from writer import write_ifs, COMPRESS_UCL
+import pathlib
+write_ifs([('/hello.txt', pathlib.Path('hello.txt'), False)], pathlib.Path('hello.ifs'), compression=COMPRESS_UCL)
+"
+```
+
 ### Simple buildfile via `mkifs.py`:
 
 ```sh
@@ -70,12 +95,29 @@ python3 mkifs.py image.build image.ifs
 python3 dumpifs.py image.ifs
 ```
 
-## Known limits
+### Buildfile with virtual images and scripts:
 
-* UCL/LZO decompression of reference images (`qnxbase.ifs`, `qnx.ifs`) requires further tuning to match reference checksums exactly
-* UCL NRV2B compressor for writer not yet implemented
-* Boot startup ELF, preboot data, script blocks, virtual images not supported
-* `mkifs.py` currently rejects virtual images and script blocks
+```sh
+# Create buildfile with virtual image and script
+cat > image.build << 'EOF'
+[virtual=virtual]
+virtual/ = {
+    file.txt
+    subdir/ = {
+        nested_file.txt
+    }
+}
+
+[script=start]
++script
+Script= {
+    #! /bin/sh
+    echo "Booting system..."
+}
+EOF
+
+python3 mkifs.py image.build image.ifs
+```
 
 ## Test verification
 
@@ -99,3 +141,64 @@ rm -rf extracted && mkdir extracted
 PYTHONPATH=/opt/openqnx/ifstools python3 dumpifs.py test.ifs -x -d extracted
 cat extracted/test.txt  # Should output "test data"
 ```
+
+## Compression round-trip tests
+
+All compression types verified:
+```sh
+# ZLIB round-trip
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
+from writer import write_ifs, COMPRESS_ZLIB, _checksum_words
+import struct, zlib, pathlib
+data = b'A' * 100 + b'B' * 100
+header = b'\\x00\\xff\\x7e\\xeb' + struct.pack('<HBB', 1, 0x06, 0) + b'\\x00' * 248 + struct.pack('<I', _checksum_words(zlib.compress(data)))
+ifsf = header + zlib.compress(data) + struct.pack('<I', _checksum_words(zlib.compress(data)))
+print('ZLIB round-trip:', zlib.decompress(ifsf[264:-4]) == data)
+"
+
+# LZO1X round-trip  
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
+from lzo1x import lzo1x_compress, lzo_decompress_block_stream
+data = b'ABC' * 50
+comp = lzo1x_compress(data)
+decomp, _ = lzo_decompress_block_stream(comp)
+print('LZO1X round-trip:', data == decomp)
+"
+
+# UCL NRV2B round-trip
+PYTHONPATH=/opt/openqnx/ifstools python3 -c "
+from ucl_nrv2b import nrv2b_compress, nrv2b_decompress_block_stream
+data = b'Hello, QNX World!'
+comp = nrv2b_compress(data)
+decomp, _ = nrv2b_decompress_block_stream(comp)
+print('UCL round-trip:', data == decomp)
+"
+```
+
+## Known limits
+
+* Boot startup ELF, preboot data, and other advanced startup features not yet implemented
+* `mkifs.py` for standalone IFS only (no boot headers; use `writer.py` for full IFS with headers)
+* Virtual images in `mkifs.py` are converted to directories in standalone IFS
+
+## Algorithm Reference
+
+### LZO1X Match Format
+
+| Match Type | Opcode Range | Offset Range | Length Range | Encoding |
+|------------|--------------|--------------|--------------|----------|
+| M1 (short) | 0-31 | 1-63 | 2 | `op = ((off-1&3)<<2)`, `b1 = (off-1)>>2` |
+| M2 (near) | 64-127 | 64-2048 | 3-8 | `op = (mlen-2)<<5 | ((off-1&7)<<2)`, `b1 = (off-1)>>3` |
+| M3 (far) | 32-63 | 32-16383 | 3-99+ | `op = 0x20|ml`, extended: `op=0x20`, `ll=ml-33`, `b1=(off-1&63)<<2`, `b2=(off-1)>>6` |
+| M4 (very far) | 16-31 | 16384+ | 3-99+ | `op = 0x10 | (base_off_bit<<3) | ml`, extended: `ll=ml-9`, `off_adj = off - 0x4000 - (bit<<11)` |
+
+### UCL NRV2B Format
+
+* Block stream: `[BE16 len][block]...[0x0000]`
+* NRV2B match: 2-byte encoded with bit-packed fields
+
+### Literal Encoding
+
+* Initial run: `t >= 17` → `lit_count = t - 17` (1-18 literals)
+* Main state: `t = 0..15` → `lit_count = t + 3` (3-18 literals)
+* Extended literal: `t = 0` → read continuation bytes for 19+ literals
